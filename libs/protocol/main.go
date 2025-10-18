@@ -33,3 +33,15 @@ type GeneralData struct {
 	Cores     int32   `json:"cores"`
 	Mhz       float64 `json:"mhz"`
 }
+
+type ProcessUsageData struct {
+	Processes []ProcessInfo `json:"processes"`
+}
+
+type ProcessInfo struct {
+	PID           int32   `json:"pid"`
+	Name          string  `json:"name"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryMB      float64 `json:"memory_mb"`
+	MemoryPercent float32 `json:"memory_percent"`
+}
