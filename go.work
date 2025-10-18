@@ -1,0 +1,9 @@
+go 1.25.3
+
+use (
+	./libs/protocol
+	./libs/utils
+	./services/client
+	./services/server
+	./tests
+)

@@ -1,0 +1,35 @@
+package protocol
+
+type Message struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
+
+type HandshakeData struct {
+	ClientID string `json:"client_id"`
+	Version  string `json:"version"`
+}
+
+type CpuUsageData struct {
+	Usage      float64   `json:"usage"`
+	CoresUsage []float64 `json:"cores_usage"`
+}
+
+type MemoryUsageData struct {
+	Total       uint64  `json:"total"`
+	Used        uint64  `json:"used"`
+	UsedPercent float64 `json:"used_percent"`
+}
+
+type DiskUsageData struct {
+	Total       uint64  `json:"total"`
+	Used        uint64  `json:"used"`
+	Free        uint64  `json:"free"`
+	UsedPercent float64 `json:"used_percent"`
+}
+
+type GeneralData struct {
+	ModelName string  `json:"model_name"`
+	Cores     int32   `json:"cores"`
+	Mhz       float64 `json:"mhz"`
+}
