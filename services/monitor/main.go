@@ -111,10 +111,7 @@ func newMonitorUI(app *tview.Application, conn net.Conn) *monitorUI {
 	}
 
 	list.SetChangedFunc(func(index int, mainText string, secondary string, shortcut rune) {
-		if index >= 0 && index < len(ui.state.order) {
-			ui.selected = ui.state.order[index]
-			ui.renderDetails()
-		}
+		ui.selectIndex(index)
 	})
 
 	list.SetDoneFunc(func() {
@@ -171,8 +168,7 @@ func (ui *monitorUI) refreshList() {
 		}
 	}
 	ui.list.SetCurrentItem(index)
-	ui.selected = ui.state.order[index]
-	ui.renderDetails()
+	ui.selectIndex(index)
 }
 
 func (ui *monitorUI) renderDetails() {
@@ -227,6 +223,16 @@ func (ui *monitorUI) renderDetails() {
 	}
 
 	ui.details.SetText(b.String())
+}
+
+func (ui *monitorUI) selectIndex(index int) {
+	if index < 0 || index >= len(ui.state.order) {
+		ui.selected = ""
+		ui.details.SetText("Selecione um cliente para ver detalhes.")
+		return
+	}
+	ui.selected = ui.state.order[index]
+	ui.renderDetails()
 }
 
 func (ui *monitorUI) setStatus(msg string) {
