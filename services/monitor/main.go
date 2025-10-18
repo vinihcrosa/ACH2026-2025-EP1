@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"libs/protocol"
 	"libs/utils"
@@ -361,7 +362,13 @@ func listenServer(conn net.Conn, snapshots chan<- []protocol.ClientStateSummary,
 }
 
 func main() {
-	conn, err := net.Dial("tcp", "localhost:8080")
+	host := flag.String("host", "localhost", "Server host or IP")
+	port := flag.Int("port", 8080, "Server TCP port")
+	flag.Parse()
+
+	address := fmt.Sprintf("%s:%d", *host, *port)
+
+	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		fmt.Println("❌ Não foi possível conectar ao servidor:", err)
 		os.Exit(1)

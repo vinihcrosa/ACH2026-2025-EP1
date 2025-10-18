@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"libs/protocol"
 	"libs/utils"
@@ -116,12 +117,16 @@ func removeClientState(remote string) *ClientState {
 }
 
 func main() {
-	// Create TCP listener on port 8080
-	ln, err := net.Listen("tcp", ":8080")
+	port := flag.Int("port", 8080, "TCP port to listen on")
+	flag.Parse()
+
+	addr := fmt.Sprintf(":%d", *port)
+
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("🚀 TCP server listening on port 8080...")
+	fmt.Printf("🚀 TCP server listening on %s...\n", addr)
 
 	for {
 		// Accept a connection

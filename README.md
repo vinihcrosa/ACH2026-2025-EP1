@@ -98,17 +98,29 @@ Essas funções seguem o mesmo padrão: coletam os dados, constroem `protocol.Me
 
 1. **Iniciar o servidor:**
    ```bash
-   go run services/server/main.go
+   go run services/server/main.go --port 8080
    ```
-   Saída esperada: `🚀 TCP server listening on port 8080...`
+   - `--port` (opcional, padrão `8080`): porta TCP em que o servidor ficará escutando.
+   Saída esperada: `🚀 TCP server listening on :8080...`
 
 2. **Rodar o cliente em outro terminal:**
    ```bash
-   go run services/client/main.go
+   go run services/client/main.go --host localhost --port 8080 --id client123
    ```
+   - `--host` (padrão `localhost`): endereço/IP do servidor.
+   - `--port` (padrão `8080`): porta TCP do servidor.
+   - `--id` (padrão `client`): identificador enviado no handshake.
    O cliente conecta, envia o handshake e passa a aceitar entradas interativas.
 
-3. **Interagir:**
+3. **Abrir o monitor (opcional):**
+   ```bash
+   go run services/monitor/main.go --host localhost --port 8080
+   ```
+   - `--host` (padrão `localhost`): endereço/IP do servidor.
+   - `--port` (padrão `8080`): porta TCP do servidor.
+   A interface mostra os clientes conectados; use ↑/↓ para navegar, `r` para solicitar snapshot, `q`/Esc para sair.
+
+4. **Interagir:**
    - Observe no servidor os logs de handshake e demais mensagens.
    - No cliente, use `/interval 1000` para alterar o envio de CPU para 1 segundo.
    - Digite qualquer outro texto para enviar como linha crua (será ecoado pelo servidor apenas se houver tratamento adicional).
@@ -123,4 +135,3 @@ Essas funções seguem o mesmo padrão: coletam os dados, constroem `protocol.Me
 - Validar versão do cliente durante o handshake para garantir compatibilidade.
 
 Essas evoluções aproveitam a base do protocolo e o canal TCP já estabelecido, mantendo o formato JSON e o delimitador `\n` para garantir mensagens legíveis e fáceis de depurar.
-

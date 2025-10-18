@@ -6,11 +6,11 @@ import (
 	"net"
 )
 
-func sendHandshake(conn net.Conn) error {
+func sendHandshake(conn net.Conn, clientID string) error {
 	msg := protocol.Message{
 		Type: "handshake",
 		Data: protocol.HandshakeData{
-			ClientID: "client123",
+			ClientID: clientID,
 			Version:  "1.0.0",
 			Role:     "client",
 		},

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -11,17 +12,23 @@ import (
 )
 
 func main() {
-	// Connect to the server
-	conn, err := net.Dial("tcp", "localhost:8080")
+	host := flag.String("host", "localhost", "Server host or IP")
+	port := flag.Int("port", 8080, "Server TCP port")
+	clientID := flag.String("id", "client", "Client identifier for handshake")
+	flag.Parse()
+
+	address := fmt.Sprintf("%s:%d", *host, *port)
+
+	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
 
-	fmt.Println("✅ Connected to the server. Type messages:")
+	fmt.Printf("✅ Connected to %s. Type messages:\n", address)
 
 	// Send handshake message
-	err = sendHandshake(conn)
+	err = sendHandshake(conn, *clientID)
 	if err != nil {
 		fmt.Println("❌ Error sending handshake:", err)
 		return
