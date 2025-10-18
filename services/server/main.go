@@ -90,15 +90,15 @@ func handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// Only allow stats messages from clients with role "client"
+		// Only allow messages from authorized roles
 		if msg.Type != "handshake" {
 			state, ok := getClientState(remote)
 			if !ok || state.Handshake == nil {
 				fmt.Printf("⚠️  Ignoring %s from %s: handshake not completed\n", msg.Type, remote)
 				continue
 			}
-			if state.Handshake.Role != "client" {
-				fmt.Printf("🚫 Ignoring %s from %s: role %s not allowed to send stats\n", msg.Type, remote, state.Handshake.Role)
+			if !isMessageAllowedForRole(msg.Type, state.Handshake.Role) {
+				fmt.Printf("🚫 Ignoring %s from %s: role %s not allowed\n", msg.Type, remote, state.Handshake.Role)
 				continue
 			}
 		}
@@ -171,11 +171,124 @@ func handleConnection(conn net.Conn) {
 			})
 			fmt.Printf("📊 Process update from %s: %d entries\n", remote, len(proc.Processes))
 			debugState(remote, state)
+		case "clients_request":
+			if err := sendClientsState(conn); err != nil {
+				fmt.Println("❌ Error sending clients state:", err)
+			}
 		default:
 			fmt.Printf("❓ Unknown message type from %s: %s\n", remote, msg.Type)
 		}
 
 	}
+}
+
+func isMessageAllowedForRole(msgType, role string) bool {
+	switch role {
+	case "client":
+		switch msgType {
+		case "cpu_usage", "memory_usage", "disk_usage", "general_data", "process_usage":
+			return true
+		}
+	case "monitor":
+		if msgType == "clients_request" {
+			return true
+		}
+	}
+	return false
+}
+
+func sendClientsState(conn net.Conn) error {
+	data := protocol.ClientsStateData{
+		Clients:     collectClientSummaries(),
+		GeneratedAt: time.Now(),
+	}
+
+	msg := protocol.Message{
+		Type: "clients_state",
+		Data: data,
+	}
+
+	jsonBytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write(append(jsonBytes, '\n'))
+	return err
+}
+
+func collectClientSummaries() []protocol.ClientStateSummary {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	summaries := make([]protocol.ClientStateSummary, 0, len(clientStates))
+	for _, st := range clientStates {
+		if st.Handshake == nil || st.Handshake.Role != "client" {
+			continue
+		}
+		summaries = append(summaries, protocol.ClientStateSummary{
+			RemoteAddr: st.RemoteAddr,
+			Handshake:  cloneHandshake(st.Handshake),
+			CPU:        cloneCpuUsage(st.CPU),
+			Memory:     cloneMemoryUsage(st.Memory),
+			Disk:       cloneDiskUsage(st.Disk),
+			General:    cloneGeneralData(st.General),
+			Processes:  cloneProcessUsage(st.Processes),
+			LastUpdate: st.LastUpdate,
+		})
+	}
+
+	return summaries
+}
+
+func cloneHandshake(hs *protocol.HandshakeData) *protocol.HandshakeData {
+	if hs == nil {
+		return nil
+	}
+	copy := *hs
+	return &copy
+}
+
+func cloneCpuUsage(cpu *protocol.CpuUsageData) *protocol.CpuUsageData {
+	if cpu == nil {
+		return nil
+	}
+	copy := *cpu
+	copy.CoresUsage = append([]float64(nil), cpu.CoresUsage...)
+	return &copy
+}
+
+func cloneMemoryUsage(mem *protocol.MemoryUsageData) *protocol.MemoryUsageData {
+	if mem == nil {
+		return nil
+	}
+	copy := *mem
+	return &copy
+}
+
+func cloneDiskUsage(disk *protocol.DiskUsageData) *protocol.DiskUsageData {
+	if disk == nil {
+		return nil
+	}
+	copy := *disk
+	return &copy
+}
+
+func cloneGeneralData(general *protocol.GeneralData) *protocol.GeneralData {
+	if general == nil {
+		return nil
+	}
+	copy := *general
+	return &copy
+}
+
+func cloneProcessUsage(proc *protocol.ProcessUsageData) *protocol.ProcessUsageData {
+	if proc == nil {
+		return nil
+	}
+	clone := *proc
+	clone.Processes = append([]protocol.ProcessInfo(nil), proc.Processes...)
+	return &clone
 }
 
 func debugState(remote string, state *ClientState) {

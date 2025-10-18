@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 type Message struct {
 	Type string      `json:"type"`
 	Data interface{} `json:"data"`
@@ -45,4 +47,22 @@ type ProcessInfo struct {
 	CPUPercent    float64 `json:"cpu_percent"`
 	MemoryMB      float64 `json:"memory_mb"`
 	MemoryPercent float32 `json:"memory_percent"`
+}
+
+type ClientsRequestData struct{}
+
+type ClientStateSummary struct {
+	RemoteAddr string            `json:"remote_addr"`
+	Handshake  *HandshakeData    `json:"handshake,omitempty"`
+	CPU        *CpuUsageData     `json:"cpu,omitempty"`
+	Memory     *MemoryUsageData  `json:"memory,omitempty"`
+	Disk       *DiskUsageData    `json:"disk,omitempty"`
+	General    *GeneralData      `json:"general,omitempty"`
+	Processes  *ProcessUsageData `json:"processes,omitempty"`
+	LastUpdate time.Time         `json:"last_update"`
+}
+
+type ClientsStateData struct {
+	Clients     []ClientStateSummary `json:"clients"`
+	GeneratedAt time.Time            `json:"generated_at"`
 }
