@@ -26,6 +26,9 @@ func main() {
 		fmt.Println("❌ Error sending handshake:", err)
 		return
 	}
+	if err := sendGeneralData(conn); err != nil {
+		fmt.Println("❌ Error sending general data:", err)
+	}
 
 	defaultInterval := 5 * time.Second
 	intervalUpdates := make(chan time.Duration)
