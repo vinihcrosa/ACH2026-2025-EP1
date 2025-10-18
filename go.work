@@ -4,6 +4,7 @@ use (
 	./libs/protocol
 	./libs/utils
 	./services/client
+	./services/monitor
 	./services/server
 	./tests
 )
