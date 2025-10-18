@@ -8,6 +8,7 @@ type Message struct {
 type HandshakeData struct {
 	ClientID string `json:"client_id"`
 	Version  string `json:"version"`
+	Role     string `json:"role"`
 }
 
 type CpuUsageData struct {

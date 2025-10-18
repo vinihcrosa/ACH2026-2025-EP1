@@ -12,6 +12,7 @@ func sendHandshake(conn net.Conn) error {
 		Data: protocol.HandshakeData{
 			ClientID: "client123",
 			Version:  "1.0.0",
+			Role:     "client",
 		},
 	}
 

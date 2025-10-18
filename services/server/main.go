@@ -90,6 +90,19 @@ func handleConnection(conn net.Conn) {
 			continue
 		}
 
+		// Only allow stats messages from clients with role "client"
+		if msg.Type != "handshake" {
+			state, ok := getClientState(remote)
+			if !ok || state.Handshake == nil {
+				fmt.Printf("⚠️  Ignoring %s from %s: handshake not completed\n", msg.Type, remote)
+				continue
+			}
+			if state.Handshake.Role != "client" {
+				fmt.Printf("🚫 Ignoring %s from %s: role %s not allowed to send stats\n", msg.Type, remote, state.Handshake.Role)
+				continue
+			}
+		}
+
 		switch msg.Type {
 		case "handshake":
 			var hs protocol.HandshakeData
@@ -100,7 +113,7 @@ func handleConnection(conn net.Conn) {
 			state := updateClientState(remote, func(state *ClientState) {
 				state.Handshake = &hs
 			})
-			fmt.Printf("🤝 Handshake from %s: ClientID=%s, Version=%s\n", remote, hs.ClientID, hs.Version)
+			fmt.Printf("🤝 Handshake from %s: ClientID=%s, Version=%s, Role=%s\n", remote, hs.ClientID, hs.Version, hs.Role)
 			debugState(remote, state)
 		case "cpu_usage":
 			var cpu protocol.CpuUsageData
@@ -168,7 +181,7 @@ func handleConnection(conn net.Conn) {
 func debugState(remote string, state *ClientState) {
 	fmt.Printf("🗂️  State snapshot for %s (updated %s)\n", remote, state.LastUpdate.Format(time.RFC3339))
 	if state.Handshake != nil {
-		fmt.Printf("   - Handshake: ClientID=%s Version=%s\n", state.Handshake.ClientID, state.Handshake.Version)
+		fmt.Printf("   - Handshake: ClientID=%s Version=%s Role=%s\n", state.Handshake.ClientID, state.Handshake.Version, state.Handshake.Role)
 	}
 	if state.General != nil {
 		fmt.Printf("   - General: %s, %d cores @ %.2f MHz\n", state.General.ModelName, state.General.Cores, state.General.Mhz)
