@@ -29,7 +29,7 @@ func main() {
 
 	defaultInterval := 5 * time.Second
 	intervalUpdates := make(chan time.Duration)
-	go startCpuTicker(conn, defaultInterval, intervalUpdates)
+	go startStatsTicker(conn, defaultInterval, intervalUpdates)
 
 	for {
 		// Read input from terminal
@@ -44,7 +44,7 @@ func main() {
 				continue
 			}
 			intervalUpdates <- time.Duration(ms) * time.Millisecond
-			fmt.Printf("⏱️ CPU usage interval set to %dms\n", ms)
+			fmt.Printf("⏱️ Stats interval set to %dms\n", ms)
 			continue
 		}
 
