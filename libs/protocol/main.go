@@ -66,3 +66,11 @@ type ClientsStateData struct {
 	Clients     []ClientStateSummary `json:"clients"`
 	GeneratedAt time.Time            `json:"generated_at"`
 }
+
+type ClientUpdateData struct {
+	Client ClientStateSummary `json:"client"`
+}
+
+type ClientRemovedData struct {
+	ClientID string `json:"client_id"`
+}

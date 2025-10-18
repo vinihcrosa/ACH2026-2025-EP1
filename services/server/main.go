@@ -23,9 +23,56 @@ type ClientState struct {
 }
 
 var (
-	stateMu      sync.Mutex
-	clientStates = make(map[string]*ClientState)
+	stateMu       sync.Mutex
+	clientStates  = make(map[string]*ClientState)
+	clientIDIndex = make(map[string]string)
 )
+
+type MonitorConn struct {
+	remote string
+	conn   net.Conn
+	enc    *json.Encoder
+	mu     sync.Mutex
+}
+
+var (
+	monitorMu sync.Mutex
+	monitors  = make(map[string]*MonitorConn)
+)
+
+func (m *MonitorConn) send(msg protocol.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.enc.Encode(msg)
+}
+
+func registerMonitor(remote string, conn net.Conn) *MonitorConn {
+	monitorMu.Lock()
+	defer monitorMu.Unlock()
+	mon := &MonitorConn{
+		remote: remote,
+		conn:   conn,
+		enc:    json.NewEncoder(conn),
+	}
+	monitors[remote] = mon
+	return mon
+}
+
+func unregisterMonitor(remote string) {
+	monitorMu.Lock()
+	defer monitorMu.Unlock()
+	delete(monitors, remote)
+}
+
+func snapshotMonitors() []*MonitorConn {
+	monitorMu.Lock()
+	defer monitorMu.Unlock()
+	list := make([]*MonitorConn, 0, len(monitors))
+	for _, m := range monitors {
+		list = append(list, m)
+	}
+	return list
+}
 
 func updateClientState(remote string, update func(state *ClientState)) *ClientState {
 	stateMu.Lock()
@@ -46,6 +93,26 @@ func getClientState(remote string) (*ClientState, bool) {
 	defer stateMu.Unlock()
 	st, ok := clientStates[remote]
 	return st, ok
+}
+
+func setClientIDForRemote(remote, clientID string) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	clientIDIndex[clientID] = remote
+}
+
+func removeClientState(remote string) *ClientState {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	st, ok := clientStates[remote]
+	if !ok {
+		return nil
+	}
+	if st.Handshake != nil {
+		delete(clientIDIndex, st.Handshake.ClientID)
+	}
+	delete(clientStates, remote)
+	return st
 }
 
 func main() {
@@ -70,17 +137,30 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
-
 	remote := conn.RemoteAddr().String()
-	fmt.Println("✅ New client connected:", remote)
+	fmt.Println("✅ New connection:", remote)
+
+	var (
+		monitor *MonitorConn
+		role    string
+	)
+
+	defer func() {
+		if monitor != nil {
+			unregisterMonitor(remote)
+		} else {
+			if removed := removeClientState(remote); removed != nil && removed.Handshake != nil && removed.Handshake.Role == "client" {
+				broadcastClientRemoved(removed.Handshake.ClientID)
+			}
+		}
+		conn.Close()
+	}()
 
 	reader := bufio.NewReader(conn)
 	for {
-		// Read the message sent by the client
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			fmt.Println("❌ Client disconnected:", err)
+			fmt.Println("❌ Connection closed:", err)
 			return
 		}
 
@@ -90,16 +170,20 @@ func handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// Only allow messages from authorized roles
 		if msg.Type != "handshake" {
-			state, ok := getClientState(remote)
-			if !ok || state.Handshake == nil {
+			if role == "" {
 				fmt.Printf("⚠️  Ignoring %s from %s: handshake not completed\n", msg.Type, remote)
 				continue
 			}
-			if !isMessageAllowedForRole(msg.Type, state.Handshake.Role) {
-				fmt.Printf("🚫 Ignoring %s from %s: role %s not allowed\n", msg.Type, remote, state.Handshake.Role)
+			if !isMessageAllowedForRole(msg.Type, role) {
+				fmt.Printf("🚫 Ignoring %s from %s: role %s not allowed\n", msg.Type, remote, role)
 				continue
+			}
+			if role == "client" {
+				if state, ok := getClientState(remote); !ok || state.Handshake == nil {
+					fmt.Printf("⚠️  Ignoring %s from %s: client state unavailable\n", msg.Type, remote)
+					continue
+				}
 			}
 		}
 
@@ -110,11 +194,22 @@ func handleConnection(conn net.Conn) {
 				fmt.Println("❌ Error parsing handshake:", err)
 				continue
 			}
-			state := updateClientState(remote, func(state *ClientState) {
-				state.Handshake = &hs
-			})
-			fmt.Printf("🤝 Handshake from %s: ClientID=%s, Version=%s, Role=%s\n", remote, hs.ClientID, hs.Version, hs.Role)
-			debugState(remote, state)
+			role = hs.Role
+			switch hs.Role {
+			case "client":
+				state := updateClientState(remote, func(state *ClientState) {
+					state.Handshake = &hs
+				})
+				setClientIDForRemote(remote, hs.ClientID)
+				fmt.Printf("🤝 Client handshake from %s: ClientID=%s, Version=%s\n", remote, hs.ClientID, hs.Version)
+				broadcastClientUpdate(state)
+				debugState(remote, state)
+			case "monitor":
+				monitor = registerMonitor(remote, conn)
+				fmt.Printf("🛰️  Monitor handshake from %s: ID=%s, Version=%s\n", remote, hs.ClientID, hs.Version)
+			default:
+				fmt.Printf("⚠️  Unknown role %q from %s\n", hs.Role, remote)
+			}
 		case "cpu_usage":
 			var cpu protocol.CpuUsageData
 			if err := utils.ParseData(msg.Data, &cpu); err != nil {
@@ -125,6 +220,7 @@ func handleConnection(conn net.Conn) {
 				state.CPU = &cpu
 			})
 			fmt.Printf("📈 CPU update from %s: total %.2f%%\n", remote, cpu.Usage)
+			broadcastClientUpdate(state)
 			debugState(remote, state)
 		case "memory_usage":
 			var mem protocol.MemoryUsageData
@@ -136,6 +232,7 @@ func handleConnection(conn net.Conn) {
 				state.Memory = &mem
 			})
 			fmt.Printf("🧠 Memory update from %s: used %.2f%%\n", remote, mem.UsedPercent)
+			broadcastClientUpdate(state)
 			debugState(remote, state)
 		case "disk_usage":
 			var disk protocol.DiskUsageData
@@ -147,6 +244,7 @@ func handleConnection(conn net.Conn) {
 				state.Disk = &disk
 			})
 			fmt.Printf("💾 Disk update from %s: used %.2f%%\n", remote, disk.UsedPercent)
+			broadcastClientUpdate(state)
 			debugState(remote, state)
 		case "general_data":
 			var general protocol.GeneralData
@@ -159,6 +257,7 @@ func handleConnection(conn net.Conn) {
 			})
 			fmt.Printf("🖥️ General data from %s: %s (%d cores @ %.2f MHz)\n",
 				remote, general.ModelName, general.Cores, general.Mhz)
+			broadcastClientUpdate(state)
 			debugState(remote, state)
 		case "process_usage":
 			var proc protocol.ProcessUsageData
@@ -170,15 +269,19 @@ func handleConnection(conn net.Conn) {
 				state.Processes = &proc
 			})
 			fmt.Printf("📊 Process update from %s: %d entries\n", remote, len(proc.Processes))
+			broadcastClientUpdate(state)
 			debugState(remote, state)
 		case "clients_request":
-			if err := sendClientsState(conn); err != nil {
+			if monitor == nil {
+				fmt.Printf("⚠️  clients_request from %s ignored: not a monitor\n", remote)
+				continue
+			}
+			if err := sendClientsState(monitor); err != nil {
 				fmt.Println("❌ Error sending clients state:", err)
 			}
 		default:
 			fmt.Printf("❓ Unknown message type from %s: %s\n", remote, msg.Type)
 		}
-
 	}
 }
 
@@ -197,7 +300,7 @@ func isMessageAllowedForRole(msgType, role string) bool {
 	return false
 }
 
-func sendClientsState(conn net.Conn) error {
+func sendClientsState(mon *MonitorConn) error {
 	data := protocol.ClientsStateData{
 		Clients:     collectClientSummaries(),
 		GeneratedAt: time.Now(),
@@ -208,13 +311,7 @@ func sendClientsState(conn net.Conn) error {
 		Data: data,
 	}
 
-	jsonBytes, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	_, err = conn.Write(append(jsonBytes, '\n'))
-	return err
+	return mon.send(msg)
 }
 
 func collectClientSummaries() []protocol.ClientStateSummary {
@@ -226,19 +323,63 @@ func collectClientSummaries() []protocol.ClientStateSummary {
 		if st.Handshake == nil || st.Handshake.Role != "client" {
 			continue
 		}
-		summaries = append(summaries, protocol.ClientStateSummary{
-			RemoteAddr: st.RemoteAddr,
-			Handshake:  cloneHandshake(st.Handshake),
-			CPU:        cloneCpuUsage(st.CPU),
-			Memory:     cloneMemoryUsage(st.Memory),
-			Disk:       cloneDiskUsage(st.Disk),
-			General:    cloneGeneralData(st.General),
-			Processes:  cloneProcessUsage(st.Processes),
-			LastUpdate: st.LastUpdate,
-		})
+		summaries = append(summaries, makeClientSummaryUnlocked(st))
 	}
 
 	return summaries
+}
+
+func makeClientSummary(state *ClientState) protocol.ClientStateSummary {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return makeClientSummaryUnlocked(state)
+}
+
+func makeClientSummaryUnlocked(state *ClientState) protocol.ClientStateSummary {
+	if state == nil {
+		return protocol.ClientStateSummary{}
+	}
+	return protocol.ClientStateSummary{
+		RemoteAddr: state.RemoteAddr,
+		Handshake:  cloneHandshake(state.Handshake),
+		CPU:        cloneCpuUsage(state.CPU),
+		Memory:     cloneMemoryUsage(state.Memory),
+		Disk:       cloneDiskUsage(state.Disk),
+		General:    cloneGeneralData(state.General),
+		Processes:  cloneProcessUsage(state.Processes),
+		LastUpdate: state.LastUpdate,
+	}
+}
+
+func broadcastToMonitors(msg protocol.Message) {
+	for _, mon := range snapshotMonitors() {
+		if err := mon.send(msg); err != nil {
+			fmt.Printf("❌ Error sending to monitor %s: %v\n", mon.remote, err)
+		}
+	}
+}
+
+func broadcastClientUpdate(state *ClientState) {
+	if state == nil || state.Handshake == nil || state.Handshake.Role != "client" {
+		return
+	}
+	summary := makeClientSummary(state)
+	msg := protocol.Message{
+		Type: "client_update",
+		Data: protocol.ClientUpdateData{Client: summary},
+	}
+	broadcastToMonitors(msg)
+}
+
+func broadcastClientRemoved(clientID string) {
+	if clientID == "" {
+		return
+	}
+	msg := protocol.Message{
+		Type: "client_removed",
+		Data: protocol.ClientRemovedData{ClientID: clientID},
+	}
+	broadcastToMonitors(msg)
 }
 
 func cloneHandshake(hs *protocol.HandshakeData) *protocol.HandshakeData {
