@@ -22,6 +22,12 @@ type monitorState struct {
 	order   []string
 }
 
+const (
+	intervalStepMs = int64(1000)
+	minIntervalMs  = int64(500)
+	maxIntervalMs  = int64(60000)
+)
+
 func newMonitorState() monitorState {
 	return monitorState{
 		clients: make(map[string]protocol.ClientStateSummary),
@@ -196,6 +202,10 @@ func (ui *monitorUI) renderDetails() {
 			fmt.Fprintf(&b, " | Núcleos: %v", shortSlice(client.CPU.CoresUsage, 6))
 		}
 	}
+	if client.StatsIntervalMs > 0 {
+		interval := time.Duration(client.StatsIntervalMs) * time.Millisecond
+		fmt.Fprintf(&b, "\n[yellow]Intervalo de envio:[-] %s (%d ms)", interval, client.StatsIntervalMs)
+	}
 	if client.Memory != nil {
 		fmt.Fprintf(&b, "\n[yellow]Uso de Memória:[-] %.2f%% (%s / %s)",
 			client.Memory.UsedPercent,
@@ -239,7 +249,58 @@ func (ui *monitorUI) setStatus(msg string) {
 	ui.status.SetText(msg)
 }
 
+func (ui *monitorUI) changeSelectedInterval(deltaMs int64) {
+	if ui.selected == "" {
+		ui.setStatus("Selecione um cliente antes de ajustar o intervalo.")
+		return
+	}
+	client, ok := ui.state.clients[ui.selected]
+	if !ok {
+		ui.setStatus("Cliente não encontrado.")
+		return
+	}
+	current := client.StatsIntervalMs
+	if current == 0 {
+		current = 5000
+	}
+	newValue := current + deltaMs
+	if newValue < minIntervalMs {
+		newValue = minIntervalMs
+	}
+	if newValue > maxIntervalMs {
+		newValue = maxIntervalMs
+	}
+	if newValue == current {
+		if deltaMs < 0 {
+			ui.setStatus("Intervalo já está no mínimo permitido.")
+		} else if deltaMs > 0 {
+			ui.setStatus("Intervalo já está no máximo permitido.")
+		}
+		return
+	}
+
+	clientID := clientIDFromSummary(client)
+	if clientID == "" {
+		ui.setStatus("Cliente não possui ID válido.")
+		return
+	}
+
+	if err := sendIntervalSetRequest(ui.conn, clientID, newValue); err != nil {
+		ui.setStatus(fmt.Sprintf("[red]Erro ao enviar novo intervalo: %v", err))
+		return
+	}
+
+	ui.setStatus(fmt.Sprintf("Solicitado novo intervalo (%d ms) para %s", newValue, displayName(client)))
+}
+
 func displayName(client protocol.ClientStateSummary) string {
+	if client.Handshake != nil && client.Handshake.ClientID != "" {
+		return client.Handshake.ClientID
+	}
+	return client.RemoteAddr
+}
+
+func clientIDFromSummary(client protocol.ClientStateSummary) string {
 	if client.Handshake != nil && client.Handshake.ClientID != "" {
 		return client.Handshake.ClientID
 	}
@@ -454,6 +515,12 @@ func main() {
 				}
 			}()
 			return nil
+		case event.Key() == tcell.KeyRune && (event.Rune() == '+' || event.Rune() == '='):
+			ui.changeSelectedInterval(-intervalStepMs)
+			return nil
+		case event.Key() == tcell.KeyRune && (event.Rune() == '-' || event.Rune() == '_'):
+			ui.changeSelectedInterval(intervalStepMs)
+			return nil
 		case event.Key() == tcell.KeyEscape:
 			app.Stop()
 			return nil
@@ -464,4 +531,22 @@ func main() {
 	if err := app.SetRoot(ui.layout(), true).EnableMouse(true).Run(); err != nil {
 		fmt.Println("❌ Erro na UI:", err)
 	}
+}
+
+func sendIntervalSetRequest(conn net.Conn, clientID string, intervalMs int64) error {
+	msg := protocol.Message{
+		Type: "interval_set_request",
+		Data: protocol.IntervalUpdateData{
+			ClientID:   clientID,
+			IntervalMs: intervalMs,
+		},
+	}
+
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write(append(bytes, '\n'))
+	return err
 }

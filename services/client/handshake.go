@@ -21,6 +21,8 @@ func sendHandshake(conn net.Conn, clientID string) error {
 		return err
 	}
 
+	writeMu.Lock()
 	_, err = conn.Write(append(jsonBytes, '\n'))
+	writeMu.Unlock()
 	return err
 }

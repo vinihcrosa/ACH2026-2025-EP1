@@ -52,14 +52,15 @@ type ProcessInfo struct {
 type ClientsRequestData struct{}
 
 type ClientStateSummary struct {
-	RemoteAddr string            `json:"remote_addr"`
-	Handshake  *HandshakeData    `json:"handshake,omitempty"`
-	CPU        *CpuUsageData     `json:"cpu,omitempty"`
-	Memory     *MemoryUsageData  `json:"memory,omitempty"`
-	Disk       *DiskUsageData    `json:"disk,omitempty"`
-	General    *GeneralData      `json:"general,omitempty"`
-	Processes  *ProcessUsageData `json:"processes,omitempty"`
-	LastUpdate time.Time         `json:"last_update"`
+	RemoteAddr      string            `json:"remote_addr"`
+	Handshake       *HandshakeData    `json:"handshake,omitempty"`
+	CPU             *CpuUsageData     `json:"cpu,omitempty"`
+	Memory          *MemoryUsageData  `json:"memory,omitempty"`
+	Disk            *DiskUsageData    `json:"disk,omitempty"`
+	General         *GeneralData      `json:"general,omitempty"`
+	Processes       *ProcessUsageData `json:"processes,omitempty"`
+	LastUpdate      time.Time         `json:"last_update"`
+	StatsIntervalMs int64             `json:"stats_interval_ms,omitempty"`
 }
 
 type ClientsStateData struct {
@@ -73,4 +74,9 @@ type ClientUpdateData struct {
 
 type ClientRemovedData struct {
 	ClientID string `json:"client_id"`
+}
+
+type IntervalUpdateData struct {
+	ClientID   string `json:"client_id,omitempty"`
+	IntervalMs int64  `json:"interval_ms"`
 }

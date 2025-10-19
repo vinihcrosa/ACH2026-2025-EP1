@@ -21,6 +21,7 @@ type ClientState struct {
 	General    *protocol.GeneralData
 	Processes  *protocol.ProcessUsageData
 	LastUpdate time.Time
+	Interval   time.Duration
 }
 
 var (
@@ -28,6 +29,14 @@ var (
 	clientStates  = make(map[string]*ClientState)
 	clientIDIndex = make(map[string]string)
 )
+
+type ClientConn struct {
+	remote   string
+	conn     net.Conn
+	enc      *json.Encoder
+	mu       sync.Mutex
+	clientID string
+}
 
 type MonitorConn struct {
 	remote string
@@ -40,6 +49,14 @@ var (
 	monitorMu sync.Mutex
 	monitors  = make(map[string]*MonitorConn)
 )
+
+var (
+	clientConnMu   sync.Mutex
+	clientConns    = make(map[string]*ClientConn)
+	clientConnByID = make(map[string]*ClientConn)
+)
+
+const defaultStatsInterval = 5 * time.Second
 
 func (m *MonitorConn) send(msg protocol.Message) error {
 	m.mu.Lock()
@@ -73,6 +90,64 @@ func snapshotMonitors() []*MonitorConn {
 		list = append(list, m)
 	}
 	return list
+}
+
+func (c *ClientConn) send(msg protocol.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enc.Encode(msg)
+}
+
+func registerClientConn(remote string, conn net.Conn, clientID string) *ClientConn {
+	clientConnMu.Lock()
+	defer clientConnMu.Unlock()
+	cc := &ClientConn{
+		remote:   remote,
+		conn:     conn,
+		enc:      json.NewEncoder(conn),
+		clientID: clientID,
+	}
+	clientConns[remote] = cc
+	if clientID != "" {
+		clientConnByID[clientID] = cc
+	}
+	return cc
+}
+
+func updateClientConnID(remote, clientID string) {
+	clientConnMu.Lock()
+	defer clientConnMu.Unlock()
+	cc, ok := clientConns[remote]
+	if !ok {
+		return
+	}
+	if cc.clientID != "" {
+		delete(clientConnByID, cc.clientID)
+	}
+	cc.clientID = clientID
+	if clientID != "" {
+		clientConnByID[clientID] = cc
+	}
+}
+
+func unregisterClientConn(remote string) {
+	clientConnMu.Lock()
+	defer clientConnMu.Unlock()
+	cc, ok := clientConns[remote]
+	if !ok {
+		return
+	}
+	if cc.clientID != "" {
+		delete(clientConnByID, cc.clientID)
+	}
+	delete(clientConns, remote)
+}
+
+func getClientConnByID(clientID string) (*ClientConn, bool) {
+	clientConnMu.Lock()
+	defer clientConnMu.Unlock()
+	cc, ok := clientConnByID[clientID]
+	return cc, ok
 }
 
 func updateClientState(remote string, update func(state *ClientState)) *ClientState {
@@ -157,6 +232,7 @@ func handleConnection(conn net.Conn) {
 			if removed := removeClientState(remote); removed != nil && removed.Handshake != nil && removed.Handshake.Role == "client" {
 				broadcastClientRemoved(removed.Handshake.ClientID)
 			}
+			unregisterClientConn(remote)
 		}
 		conn.Close()
 	}()
@@ -204,8 +280,10 @@ func handleConnection(conn net.Conn) {
 			case "client":
 				state := updateClientState(remote, func(state *ClientState) {
 					state.Handshake = &hs
+					state.Interval = defaultStatsInterval
 				})
 				setClientIDForRemote(remote, hs.ClientID)
+				registerClientConn(remote, conn, hs.ClientID)
 				fmt.Printf("🤝 Client handshake from %s: ClientID=%s, Version=%s\n", remote, hs.ClientID, hs.Version)
 				broadcastClientUpdate(state)
 				debugState(remote, state)
@@ -276,6 +354,34 @@ func handleConnection(conn net.Conn) {
 			fmt.Printf("📊 Process update from %s: %d entries\n", remote, len(proc.Processes))
 			broadcastClientUpdate(state)
 			debugState(remote, state)
+		case "interval_update":
+			var upd protocol.IntervalUpdateData
+			if err := utils.ParseData(msg.Data, &upd); err != nil {
+				fmt.Println("❌ Error parsing interval update:", err)
+				continue
+			}
+			state := updateClientState(remote, func(state *ClientState) {
+				state.Interval = time.Duration(upd.IntervalMs) * time.Millisecond
+			})
+			fmt.Printf("⏱️ Interval update from %s: %dms\n", remote, upd.IntervalMs)
+			broadcastClientUpdate(state)
+		case "interval_set_request":
+			if monitor == nil {
+				fmt.Printf("⚠️  interval_set_request from %s ignored: not a monitor\n", remote)
+				continue
+			}
+			var req protocol.IntervalUpdateData
+			if err := utils.ParseData(msg.Data, &req); err != nil {
+				fmt.Println("❌ Error parsing interval set request:", err)
+				continue
+			}
+			if req.ClientID == "" || req.IntervalMs <= 0 {
+				fmt.Printf("⚠️  Invalid interval request from %s: %+v\n", remote, req)
+				continue
+			}
+			if err := sendIntervalSet(req.ClientID, req.IntervalMs); err != nil {
+				fmt.Println("❌ Error sending interval to client:", err)
+			}
 		case "clients_request":
 			if monitor == nil {
 				fmt.Printf("⚠️  clients_request from %s ignored: not a monitor\n", remote)
@@ -294,11 +400,11 @@ func isMessageAllowedForRole(msgType, role string) bool {
 	switch role {
 	case "client":
 		switch msgType {
-		case "cpu_usage", "memory_usage", "disk_usage", "general_data", "process_usage":
+		case "cpu_usage", "memory_usage", "disk_usage", "general_data", "process_usage", "interval_update":
 			return true
 		}
 	case "monitor":
-		if msgType == "clients_request" {
+		if msgType == "clients_request" || msgType == "interval_set_request" {
 			return true
 		}
 	}
@@ -345,14 +451,15 @@ func makeClientSummaryUnlocked(state *ClientState) protocol.ClientStateSummary {
 		return protocol.ClientStateSummary{}
 	}
 	return protocol.ClientStateSummary{
-		RemoteAddr: state.RemoteAddr,
-		Handshake:  cloneHandshake(state.Handshake),
-		CPU:        cloneCpuUsage(state.CPU),
-		Memory:     cloneMemoryUsage(state.Memory),
-		Disk:       cloneDiskUsage(state.Disk),
-		General:    cloneGeneralData(state.General),
-		Processes:  cloneProcessUsage(state.Processes),
-		LastUpdate: state.LastUpdate,
+		RemoteAddr:      state.RemoteAddr,
+		Handshake:       cloneHandshake(state.Handshake),
+		CPU:             cloneCpuUsage(state.CPU),
+		Memory:          cloneMemoryUsage(state.Memory),
+		Disk:            cloneDiskUsage(state.Disk),
+		General:         cloneGeneralData(state.General),
+		Processes:       cloneProcessUsage(state.Processes),
+		LastUpdate:      state.LastUpdate,
+		StatsIntervalMs: state.Interval.Milliseconds(),
 	}
 }
 
@@ -385,6 +492,18 @@ func broadcastClientRemoved(clientID string) {
 		Data: protocol.ClientRemovedData{ClientID: clientID},
 	}
 	broadcastToMonitors(msg)
+}
+
+func sendIntervalSet(clientID string, intervalMs int64) error {
+	cc, ok := getClientConnByID(clientID)
+	if !ok {
+		return fmt.Errorf("client %s not connected", clientID)
+	}
+	msg := protocol.Message{
+		Type: "set_interval",
+		Data: protocol.IntervalUpdateData{IntervalMs: intervalMs},
+	}
+	return cc.send(msg)
 }
 
 func cloneHandshake(hs *protocol.HandshakeData) *protocol.HandshakeData {

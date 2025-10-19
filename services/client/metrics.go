@@ -15,18 +15,24 @@ import (
 )
 
 func sendCpuUsage(conn net.Conn) error {
-	cpuPercent, err := cpu.Percent(time.Second, false)
-	coresPercent, err := cpu.Percent(time.Second, true)
+	coresPercent, err := cpu.Percent(0, true)
 	if err != nil {
 		return err
 	}
-	if len(cpuPercent) == 0 {
+	if len(coresPercent) == 0 {
 		return fmt.Errorf("no CPU usage data")
 	}
+
+	var total float64
+	for _, v := range coresPercent {
+		total += v
+	}
+	total /= float64(len(coresPercent))
+
 	msg := protocol.Message{
 		Type: "cpu_usage",
 		Data: protocol.CpuUsageData{
-			Usage:      cpuPercent[0],
+			Usage:      total,
 			CoresUsage: coresPercent,
 		},
 	}
@@ -36,7 +42,9 @@ func sendCpuUsage(conn net.Conn) error {
 		return err
 	}
 
+	writeMu.Lock()
 	_, err = conn.Write(append(jsonBytes, '\n'))
+	writeMu.Unlock()
 	return err
 }
 
@@ -60,7 +68,9 @@ func sendMemoryUsage(conn net.Conn) error {
 		return err
 	}
 
+	writeMu.Lock()
 	_, err = conn.Write(append(jsonBytes, '\n'))
+	writeMu.Unlock()
 	return err
 }
 
@@ -82,7 +92,9 @@ func sendDiskUsage(conn net.Conn) error {
 		return err
 	}
 
+	writeMu.Lock()
 	_, err = conn.Write(append(jsonBytes, '\n'))
+	writeMu.Unlock()
 	return err
 }
 
@@ -106,7 +118,9 @@ func sendGeneralData(conn net.Conn) error {
 		return err
 	}
 
+	writeMu.Lock()
 	_, err = conn.Write(append(jsonBytes, '\n'))
+	writeMu.Unlock()
 	return err
 }
 

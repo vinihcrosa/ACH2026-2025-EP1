@@ -8,8 +8,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var writeMu sync.Mutex
 
 func main() {
 	host := flag.String("host", "localhost", "Server host or IP")
@@ -38,8 +41,53 @@ func main() {
 	}
 
 	defaultInterval := 5 * time.Second
-	intervalUpdates := make(chan time.Duration)
+	intervalUpdates := make(chan time.Duration, 1)
+
+	var (
+		intervalMu      sync.Mutex
+		currentInterval = defaultInterval
+	)
+
+	setInterval := func(newInterval time.Duration, source string, notify bool) {
+		if newInterval <= 0 {
+			fmt.Println("❌ Interval must be greater than zero.")
+			return
+		}
+		intervalMu.Lock()
+		previous := currentInterval
+		currentInterval = newInterval
+		intervalMu.Unlock()
+		if previous != newInterval {
+			select {
+			case intervalUpdates <- newInterval:
+			default:
+				select {
+				case <-intervalUpdates:
+				default:
+				}
+				intervalUpdates <- newInterval
+			}
+		}
+		fmt.Printf("⏱️ Stats interval set to %dms (%s)\n", newInterval.Milliseconds(), source)
+		if notify {
+			if err := sendIntervalUpdate(conn, newInterval); err != nil {
+				fmt.Println("❌ Error notifying interval update:", err)
+			}
+		}
+	}
+
 	go startStatsTicker(conn, defaultInterval, intervalUpdates)
+
+    go listenServer(conn, func(interval time.Duration) {
+        setInterval(interval, "servidor", true)
+    }, func(err error) {
+        fmt.Println("❌ Connection closed by server:", err)
+        os.Exit(1)
+    })
+
+	if err := sendIntervalUpdate(conn, currentInterval); err != nil {
+		fmt.Println("⚠️ Could not notify initial interval:", err)
+	}
 
 	for {
 		// Read input from terminal
@@ -53,20 +101,17 @@ func main() {
 				fmt.Println("❌ Interval must be a positive integer (milliseconds).")
 				continue
 			}
-			intervalUpdates <- time.Duration(ms) * time.Millisecond
-			fmt.Printf("⏱️ Stats interval set to %dms\n", ms)
+			setInterval(time.Duration(ms)*time.Millisecond, "comando local", true)
 			continue
 		}
 
 		// Send message
+		writeMu.Lock()
 		_, err = conn.Write([]byte(text))
+		writeMu.Unlock()
 		if err != nil {
 			fmt.Println("❌ Error sending:", err)
 			break
 		}
-
-		// Read response from server
-		response, _ := bufio.NewReader(conn).ReadString('\n')
-		fmt.Printf("📨 Server responded: %s", response)
 	}
 }
