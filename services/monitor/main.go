@@ -208,7 +208,7 @@ func (ui *monitorUI) refreshList() {
 		if !client.LastUpdate.IsZero() {
 			elapsed = time.Since(client.LastUpdate).Round(time.Second).String()
 		}
-		ui.list.AddItem(name, fmt.Sprintf("Atualizado há %s", elapsed), 0, nil)
+		ui.list.AddItem(name, fmt.Sprintf("%s | Atualizado há %s", client.RemoteAddr, elapsed), 0, nil)
 	}
 	if len(ui.state.order) == 0 {
 		ui.selected = ""
@@ -243,6 +243,9 @@ func (ui *monitorUI) renderDetails() {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "[yellow]Cliente:[-] %s\n", displayName(client))
+	if client.RemoteAddr != "" {
+		fmt.Fprintf(&b, "[yellow]Origem:[-] %s\n", client.RemoteAddr)
+	}
 	if client.General != nil {
 		fmt.Fprintf(&b, "CPU: %s | Cores: %d | %.2f MHz\n",
 			client.General.ModelName, client.General.Cores, client.General.Mhz)
