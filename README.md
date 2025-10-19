@@ -110,6 +110,8 @@ Essas funções seguem o mesmo padrão: coletam os dados, constroem `protocol.Me
    - No cliente, use `/interval 1000` para alterar o envio de CPU para 1 segundo.
    - Digite qualquer outro texto para enviar como linha crua (será ecoado pelo servidor apenas se houver tratamento adicional).
 
+> 💡 Para gerar executáveis em `bin/`, utilize `make build-all` (ou `make build-server`, `make build-client`, `make build-monitor`). A pasta `bin/` já está listada no `.gitignore`.
+
 ---
 
 ## Extensões sugeridas
