@@ -50,35 +50,20 @@ No servidor, o pacote `libs/utils` fornece `ParseData`, que transforma o `interf
 
 ## Handshake inicial
 
-- **Cliente:** a função `sendHandshake(conn net.Conn)` prepara a mensagem:
-
-  ```go
-  protocol.Message{
-    Type: "handshake",
-    Data: protocol.HandshakeData{
-      ClientID: "client123",
-      Version:  "1.0.0",
-    },
-  }
-  ```
-
-- **Servidor:** ao receber, a `handleConnection` detecta `msg.Type == "handshake"`, converte os dados para `HandshakeData` e registra no console:
-
-  ```
-  🤝 Handshake received from 127.0.0.1:XXXXX: ClientID=client123, Version=1.0.0
-  ```
-
-Esse passo estabelece identificação lógica do cliente antes de qualquer telemetria.
+- **Cliente:** logo após conectar, envia uma mensagem `handshake` com o `client_id` definido pela flag `--id`, a versão do cliente e o papel (`client`).
+- **Servidor:** registra o `client_id`, associa a conexão ao estado em memória e começa a aceitar as demais mensagens. Conexões de monitor também realizam handshake (`role=monitor`) antes de pedir dados.
 
 ---
 
-## Ticker de CPU e Comando `/interval`
+## Ticker de métricas e controle de intervalo
 
-- O cliente inicia um *ticker* (`time.NewTicker`) com intervalo padrão de 5 segundos para `sendCpuUsage`.
-- O usuário pode alterar o período digitando `/interval <ms>` no terminal do cliente.
-- Internamente, o canal `intervalUpdates` atualiza o ticker com a nova duração, permitindo ajustar o ritmo de envio em tempo de execução.
+- Cada cliente inicia um *ticker* com intervalo padrão de 5 segundos, disparando o envio de CPU, memória, disco e processos.
+- O intervalo pode ser alterado:
+  - pelo próprio cliente, via comando `/interval <ms>`;
+  - remotamente, pelo monitor (`+`/`-`), que envia uma solicitação ao servidor; o servidor encaminha o novo intervalo para o cliente.
+- O cliente confirma a alteração enviando `interval_update`, e o servidor propaga a nova configuração para todos os monitores.
 
-O payload enviado contém a média da CPU (`usage`) e uma lista com o consumo por núcleo (`cores_usage`).
+O payload de CPU contém a média geral (`usage`) e os consumos por núcleo (`cores_usage`).
 
 ---
 
@@ -135,3 +120,9 @@ Essas funções seguem o mesmo padrão: coletam os dados, constroem `protocol.Me
 - Validar versão do cliente durante o handshake para garantir compatibilidade.
 
 Essas evoluções aproveitam a base do protocolo e o canal TCP já estabelecido, mantendo o formato JSON e o delimitador `\n` para garantir mensagens legíveis e fáceis de depurar.
+
+---
+
+## Especificação do protocolo
+
+Para a lista completa de mensagens, seus emissores e payloads, consulte [`docs/protocol.md`](docs/protocol.md).
