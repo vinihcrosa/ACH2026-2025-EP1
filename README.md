@@ -103,7 +103,7 @@ Essas funções seguem o mesmo padrão: coletam os dados, constroem `protocol.Me
    ```
    - `--host` (padrão `localhost`): endereço/IP do servidor.
    - `--port` (padrão `8080`): porta TCP do servidor.
-   A interface mostra os clientes conectados; use ↑/↓ para navegar, `+`/`-` para ajustar o intervalo de envio do cliente selecionado, `r` para solicitar snapshot, `q`/Esc para sair.
+   A interface mostra os clientes conectados; use ↑/↓ para navegar, `+`/`-` para ajustar o intervalo de envio do cliente selecionado, `r` para solicitar snapshot, `q`/Esc para sair. O painel detalhado inclui históricos ASCII de CPU e memória.
 
 4. **Interagir:**
    - Observe no servidor os logs de handshake e demais mensagens.

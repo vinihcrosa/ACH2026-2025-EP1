@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"libs/protocol"
 	"libs/utils"
+	"math"
 	"net"
 	"os"
 	"sort"
@@ -14,24 +15,33 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
 type monitorState struct {
 	clients map[string]protocol.ClientStateSummary
 	order   []string
+	history map[string]*statsHistory
 }
 
 const (
-	intervalStepMs = int64(1000)
-	minIntervalMs  = int64(500)
-	maxIntervalMs  = int64(60000)
+	intervalStepMs  = int64(1000)
+	minIntervalMs   = int64(500)
+	maxIntervalMs   = int64(60000)
+	historyCapacity = 60
 )
+
+type statsHistory struct {
+	CPU    []float64
+	Memory []float64
+}
 
 func newMonitorState() monitorState {
 	return monitorState{
 		clients: make(map[string]protocol.ClientStateSummary),
 		order:   []string{},
+		history: make(map[string]*statsHistory),
 	}
 }
 
@@ -43,14 +53,25 @@ func clientKey(summary protocol.ClientStateSummary) string {
 }
 
 func (s *monitorState) applySnapshot(list []protocol.ClientStateSummary) {
-	s.clients = make(map[string]protocol.ClientStateSummary, len(list))
-	s.order = s.order[:0]
+	active := make(map[string]struct{}, len(list))
+	newClients := make(map[string]protocol.ClientStateSummary, len(list))
+	newOrder := make([]string, 0, len(list))
 	for _, item := range list {
 		id := clientKey(item)
-		s.clients[id] = item
-		s.order = append(s.order, id)
+		newClients[id] = item
+		newOrder = append(newOrder, id)
+		active[id] = struct{}{}
+		s.appendMetrics(id, item)
 	}
-	sort.Strings(s.order)
+	sort.Strings(newOrder)
+	s.clients = newClients
+	s.order = newOrder
+
+	for id := range s.history {
+		if _, ok := active[id]; !ok {
+			delete(s.history, id)
+		}
+	}
 }
 
 func (s *monitorState) applyUpdate(summary protocol.ClientStateSummary) {
@@ -60,6 +81,7 @@ func (s *monitorState) applyUpdate(summary protocol.ClientStateSummary) {
 		sort.Strings(s.order)
 	}
 	s.clients[id] = summary
+	s.appendMetrics(id, summary)
 }
 
 func (s *monitorState) applyRemoval(clientID string) {
@@ -73,6 +95,36 @@ func (s *monitorState) applyRemoval(clientID string) {
 			break
 		}
 	}
+	delete(s.history, clientID)
+}
+
+func (s *monitorState) appendMetrics(id string, summary protocol.ClientStateSummary) {
+	h := s.ensureHistory(id)
+	if summary.CPU != nil {
+		h.CPU = appendValue(h.CPU, summary.CPU.Usage)
+	}
+	if summary.Memory != nil {
+		h.Memory = appendValue(h.Memory, summary.Memory.UsedPercent)
+	}
+}
+
+func (s *monitorState) ensureHistory(id string) *statsHistory {
+	if h, ok := s.history[id]; ok {
+		return h
+	}
+	h := &statsHistory{}
+	s.history[id] = h
+	return h
+}
+
+func appendValue(values []float64, v float64) []float64 {
+	values = append(values, v)
+	if len(values) > historyCapacity {
+		start := len(values) - historyCapacity
+		copy(values, values[start:])
+		values = values[:historyCapacity]
+	}
+	return values
 }
 
 type monitorUI struct {
@@ -196,27 +248,48 @@ func (ui *monitorUI) renderDetails() {
 			client.General.ModelName, client.General.Cores, client.General.Mhz)
 	}
 
+	sections := make([]string, 0, 3)
+
 	if client.CPU != nil {
-		fmt.Fprintf(&b, "\n[yellow]Uso de CPU:[-] %.2f%%", client.CPU.Usage)
-		if len(client.CPU.CoresUsage) > 0 {
-			fmt.Fprintf(&b, " | Núcleos: %v", shortSlice(client.CPU.CoresUsage, 6))
+		cpuInfo := []string{fmt.Sprintf("[yellow]CPU Geral:[-] %s %5.1f%%", coloredBar(client.CPU.Usage, 20), client.CPU.Usage)}
+		for idx, usage := range client.CPU.CoresUsage {
+			cpuInfo = append(cpuInfo, fmt.Sprintf("Core%-2d %s %5.1f%%", idx+1, coloredBar(usage, 16), usage))
 		}
+		var heat []string
+		if hist, ok := ui.state.history[ui.selected]; ok {
+			heat = labelledHeatmapLines("CPU (%)", hist.CPU, 26, 12)
+		}
+		sections = append(sections, mergeColumns(heat, cpuInfo, "   "))
 	}
-	if client.StatsIntervalMs > 0 {
-		interval := time.Duration(client.StatsIntervalMs) * time.Millisecond
-		fmt.Fprintf(&b, "\n[yellow]Intervalo de envio:[-] %s (%d ms)", interval, client.StatsIntervalMs)
-	}
+
+	memInfo := []string{}
 	if client.Memory != nil {
-		fmt.Fprintf(&b, "\n[yellow]Uso de Memória:[-] %.2f%% (%s / %s)",
+		memInfo = append(memInfo, fmt.Sprintf("[yellow]Memória:[-] %s %5.1f%% (%s / %s)",
+			coloredBar(client.Memory.UsedPercent, 20),
 			client.Memory.UsedPercent,
 			humanBytes(client.Memory.Used),
-			humanBytes(client.Memory.Total))
+			humanBytes(client.Memory.Total)))
 	}
 	if client.Disk != nil {
-		fmt.Fprintf(&b, "\n[yellow]Uso de Disco:[-] %.2f%% (%s / %s)",
+		memInfo = append(memInfo, fmt.Sprintf("[yellow]Disco:[-] %s %5.1f%% (%s / %s)",
+			coloredBar(client.Disk.UsedPercent, 20),
 			client.Disk.UsedPercent,
 			humanBytes(client.Disk.Used),
-			humanBytes(client.Disk.Total))
+			humanBytes(client.Disk.Total)))
+	}
+	if client.StatsIntervalMs > 0 {
+		memInfo = append(memInfo, fmt.Sprintf("[yellow]Intervalo de envio:[-] %d ms", client.StatsIntervalMs))
+	}
+	if len(memInfo) > 0 {
+		var heat []string
+		if hist, ok := ui.state.history[ui.selected]; ok {
+			heat = labelledHeatmapLines("Memória (%)", hist.Memory, 26, 6)
+		}
+		sections = append(sections, mergeColumns(heat, memInfo, "   "))
+	}
+
+	if len(sections) > 0 {
+		fmt.Fprintf(&b, "\n%s\n", strings.Join(sections, "\n\n"))
 	}
 
 	if client.Processes != nil && len(client.Processes.Processes) > 0 {
@@ -307,21 +380,6 @@ func clientIDFromSummary(client protocol.ClientStateSummary) string {
 	return client.RemoteAddr
 }
 
-func shortSlice(values []float64, max int) string {
-	n := min(len(values), max)
-	if n == 0 {
-		return "[]"
-	}
-	parts := make([]string, n)
-	for i := 0; i < n; i++ {
-		parts[i] = fmt.Sprintf("%.1f%%", values[i])
-	}
-	if n < len(values) {
-		parts = append(parts, "…")
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
-}
-
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -339,6 +397,13 @@ func min(a, b int) int {
 	return b
 }
 
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func humanBytes(v uint64) string {
 	const unit = 1024
 	if v < unit {
@@ -351,6 +416,187 @@ func humanBytes(v uint64) string {
 	}
 	value := float64(v) / float64(div)
 	return fmt.Sprintf("%.2f%cB", value, "KMGTPE"[exp])
+}
+
+func coloredBar(value float64, width int) string {
+	if width <= 0 {
+		width = 1
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 100 {
+		value = 100
+	}
+	filled := int(math.Round(value / 100 * float64(width)))
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	color := colorForUsage(value)
+	var b strings.Builder
+	if filled > 0 {
+		b.WriteString("[")
+		b.WriteString(color)
+		b.WriteString("]")
+		b.WriteString(strings.Repeat("█", filled))
+		b.WriteString("[-]")
+	}
+	if width-filled > 0 {
+		b.WriteString("[#3b3b3b]")
+		b.WriteString(strings.Repeat("░", width-filled))
+		b.WriteString("[-]")
+	}
+	return b.String()
+}
+
+func colorForUsage(value float64) string {
+	switch {
+	case value >= 90:
+		return "#ff5555"
+	case value >= 75:
+		return "#ffb86c"
+	case value >= 50:
+		return "#f1fa8c"
+	case value >= 25:
+		return "#50fa7b"
+	default:
+		return "#8be9fd"
+	}
+}
+
+func labelledHeatmapLines(title string, values []float64, width, height int) []string {
+	lines := renderHeatmapLines(values, width, height)
+	if len(lines) == 0 {
+		return nil
+	}
+	label := fmt.Sprintf("[yellow]%s[-]", title)
+	if len(label) > 0 {
+		lines[0] = padMarkup(label, visibleWidth(lines[0]))
+	}
+	return lines
+}
+
+func renderHeatmapLines(values []float64, width, height int) []string {
+	if len(values) == 0 || height <= 0 {
+		return nil
+	}
+	if width <= 0 {
+		width = len(values)
+	}
+	if len(values) > width {
+		values = values[len(values)-width:]
+	} else if len(values) < width {
+		padding := make([]float64, width-len(values))
+		values = append(padding, values...)
+	}
+	if height < 2 {
+		height = 2
+	}
+
+	lines := make([]string, height)
+	for row := height - 1; row >= 0; row-- {
+		var line strings.Builder
+		for _, v := range values {
+			filled := int(math.Round(v / 100 * float64(height-1)))
+			if filled > height-1 {
+				filled = height - 1
+			}
+			if filled < 0 {
+				filled = 0
+			}
+			if filled >= row {
+				color := colorForUsage(v)
+				line.WriteString("[")
+				line.WriteString(color)
+				line.WriteString("]•[-]")
+			} else {
+				line.WriteString(" ")
+			}
+		}
+		lines[height-1-row] = line.String()
+	}
+	return lines
+}
+
+func mergeColumns(left []string, right []string, gap string) string {
+	if len(left) == 0 {
+		return strings.Join(right, "\n")
+	}
+	if len(right) == 0 {
+		return strings.Join(left, "\n")
+	}
+
+	maxWidth := 0
+	for _, line := range left {
+		if w := visibleWidth(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+
+	rows := max(len(left), len(right))
+	result := make([]string, rows)
+	for i := 0; i < rows; i++ {
+		var l, r string
+		if i < len(left) {
+			l = padMarkup(left[i], maxWidth)
+		} else {
+			l = strings.Repeat(" ", maxWidth)
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		result[i] = l + gap + r
+	}
+	return strings.Join(result, "\n")
+}
+
+func indentBlock(text, prefix string) string {
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func stripMarkup(text string) string {
+	if text == "" {
+		return ""
+	}
+	var b strings.Builder
+	skip := 0
+	for _, r := range text {
+		if skip > 0 {
+			if r == ']' {
+				skip--
+			}
+			continue
+		}
+		if r == '[' {
+			skip++
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func visibleWidth(text string) int {
+	stripped := stripMarkup(text)
+	return runewidth.StringWidth(stripped)
+}
+
+func padMarkup(text string, width int) string {
+	diff := width - visibleWidth(text)
+	if diff <= 0 {
+		return text
+	}
+	return text + strings.Repeat(" ", diff)
 }
 
 func sendMonitorHandshake(conn net.Conn) error {
