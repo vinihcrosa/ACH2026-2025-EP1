@@ -280,6 +280,8 @@ func displayName(client protocol.ClientStateSummary) string {
 	return client.RemoteAddr
 }
 
+// Código gerado com auxílio de IA.
+
 // clientIDFromSummary devolve o identificador usado para enviar comandos ao cliente.
 func clientIDFromSummary(client protocol.ClientStateSummary) string {
 	if client.Handshake != nil && client.Handshake.ClientID != "" {

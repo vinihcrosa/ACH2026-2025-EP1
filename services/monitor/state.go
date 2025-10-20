@@ -121,3 +121,5 @@ func appendValue(values []float64, v float64) []float64 {
 	}
 	return values
 }
+
+// Código gerado com auxílio de IA.

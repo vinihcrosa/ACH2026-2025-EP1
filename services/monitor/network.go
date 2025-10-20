@@ -107,3 +107,5 @@ func listenServer(conn net.Conn, snapshots chan<- []protocol.ClientStateSummary,
 		}
 	}
 }
+
+// Código gerado com auxílio de IA.

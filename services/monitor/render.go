@@ -225,3 +225,5 @@ func padMarkup(text string, width int) string {
 	}
 	return text + strings.Repeat(" ", diff)
 }
+
+// Código gerado com auxílio de IA.

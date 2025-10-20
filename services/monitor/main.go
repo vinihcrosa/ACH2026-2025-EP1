@@ -19,3 +19,5 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// Código gerado com auxílio de IA.

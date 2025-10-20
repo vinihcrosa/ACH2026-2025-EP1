@@ -78,12 +78,12 @@ func main() {
 
 	go startStatsTicker(conn, defaultInterval, intervalUpdates)
 
-    go listenServer(conn, func(interval time.Duration) {
-        setInterval(interval, "servidor", true)
-    }, func(err error) {
-        fmt.Println("❌ Connection closed by server:", err)
-        os.Exit(1)
-    })
+	go listenServer(conn, func(interval time.Duration) {
+		setInterval(interval, "servidor", true)
+	}, func(err error) {
+		fmt.Println("❌ Connection closed by server:", err)
+		os.Exit(1)
+	})
 
 	if err := sendIntervalUpdate(conn, currentInterval); err != nil {
 		fmt.Println("⚠️ Could not notify initial interval:", err)
@@ -115,3 +115,5 @@ func main() {
 		}
 	}
 }
+
+// Código gerado com auxílio de IA.

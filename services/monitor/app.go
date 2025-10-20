@@ -107,3 +107,5 @@ func runMonitor(address string) error {
 
 	return nil
 }
+
+// Código gerado com auxílio de IA.

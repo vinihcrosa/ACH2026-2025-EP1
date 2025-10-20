@@ -36,3 +36,5 @@ func main() {
 		go handleConnection(conn)
 	}
 }
+
+// Código gerado com auxílio de IA.
